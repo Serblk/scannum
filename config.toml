@@ -1,0 +1,31 @@
+[app]
+database_path = "data/system.db"
+captures_directory = "captures"
+reports_directory = "reports"
+timezone = "Europe/Moscow"
+process_every_n_frames = 3
+frame_queue_size = 8
+camera_retry_seconds = 5.0
+confirmations_required = 3
+confirmation_window_seconds = 3.0
+duplicate_cooldown_seconds = 30.0
+minimum_ocr_confidence = 0.65
+fueling_interval_hours = 8
+manual_approval_enabled = true
+
+[recognition]
+detector_model = "yolo-v9-t-384-license-plate-end2end"
+ocr_model = "cct-xs-v2-global-model"
+device = "cpu"
+model_cache_directory = "models/cache"
+
+[[cameras]]
+id = "camera-1"
+name = "USB-камера 1"
+source = 0
+enabled = true
+width = 1280
+height = 720
+
+# Для дополнительных камер скопируйте блок [[cameras]], задайте уникальные
+# id/name и укажите source = 1, 2 или 3.

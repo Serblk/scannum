@@ -1,0 +1,12 @@
+Metadata-Version: 2.4
+Name: plate-guard
+Version: 0.1.0
+Summary: Локальный прототип автоматической фиксации автомобильных номеров
+Requires-Python: <3.14,>=3.12
+Requires-Dist: argon2-cffi<26,>=25.1
+Requires-Dist: fast-alpr[onnx]==0.4.0
+Requires-Dist: openpyxl<4,>=3.1.5
+Requires-Dist: PySide6<7,>=6.8
+Requires-Dist: tzdata>=2025.2
+Provides-Extra: dev
+Requires-Dist: pytest<9,>=8.3; extra == "dev"

@@ -1,0 +1,17 @@
+.venv/
+.idea/workspace.xml
+.idea/shelf/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+
+data/*.db
+data/*.db-*
+captures/*
+reports/*
+models/cache/
+!data/.gitkeep
+!captures/.gitkeep
+!reports/.gitkeep
+!models/.gitkeep

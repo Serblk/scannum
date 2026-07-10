@@ -1,0 +1,2 @@
+[console_scripts]
+plate-guard = plate_guard.cli:main
