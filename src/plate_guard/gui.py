@@ -12,7 +12,13 @@ from .admin import (
     AdminService,
     HistoryClearResult,
 )
-from .config import ProjectConfig
+from .camera_discovery import LocalCamera, discover_local_cameras
+from .camera_settings import (
+    CameraSettingsError,
+    load_selected_cameras,
+    save_selected_cameras,
+)
+from .config import CameraConfig, ProjectConfig
 from .exporter import ExportError, export_to_xlsx
 from .models import AccessDecision, DecisionStatus, PlateCandidate, RecognitionEvent
 from .service import PlateGuardService
@@ -47,6 +53,8 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollArea,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -128,10 +136,22 @@ class MainWindow(QMainWindow):
         self._config = config
         self._repository = repository
         self._service = service
+        self._camera_settings_path = (
+            config.app.database_path.parent.parent / "camera_sources.json"
+        )
+        try:
+            self._saved_cameras = load_selected_cameras(self._camera_settings_path)
+        except CameraSettingsError:
+            self._saved_cameras = ()
+        self._service.configure_cameras(())
         self._admin_service = AdminService(repository, config.app.captures_directory)
         self._timezone = ZoneInfo(config.app.timezone)
         self._service_thread: threading.Thread | None = None
         self._pending_event_id: int | None = None
+        self._displayed_plate: str | None = None
+        self._display_timer = QTimer(self)
+        self._display_timer.setSingleShot(True)
+        self._display_timer.timeout.connect(self._clear_current_display)
         self._bridge = _Bridge()
         self._bridge.frame_ready.connect(self._on_frame)
         self._bridge.event_ready.connect(self._on_event)
@@ -173,6 +193,10 @@ class MainWindow(QMainWindow):
         self.admin_button.clicked.connect(self._open_administration)
         header.addWidget(self.admin_button)
 
+        self.camera_settings_button = QPushButton("Настройка камер")
+        self.camera_settings_button.clicked.connect(self._open_camera_settings)
+        header.addWidget(self.camera_settings_button)
+
         self.manual_checkbox = QCheckBox("Ручное одобрение")
         self.manual_checkbox.setChecked(self._service.manual_approval_enabled)
         self.manual_checkbox.setToolTip(
@@ -184,8 +208,17 @@ class MainWindow(QMainWindow):
 
         content = QHBoxLayout()
         content.setSpacing(16)
-        self.video = VideoPanel()
-        content.addWidget(self.video, 3)
+        self.video_scroll = QScrollArea()
+        self.video_scroll.setWidgetResizable(True)
+        self.video_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.video_container = QWidget()
+        self.video_grid = QGridLayout(self.video_container)
+        self.video_grid.setContentsMargins(0, 0, 0, 0)
+        self.video_grid.setSpacing(10)
+        self.video_scroll.setWidget(self.video_container)
+        self._video_panels: dict[str, VideoPanel] = {}
+        self._rebuild_video_grid(())
+        content.addWidget(self.video_scroll, 3)
         content.addWidget(self._build_status_panel(), 2)
         root.addLayout(content, 4)
 
@@ -300,15 +333,86 @@ class MainWindow(QMainWindow):
         )
         self._service_thread.start()
 
+    def _open_camera_settings(self) -> None:
+        previous = self._service.active_cameras
+        self._service.configure_cameras(())
+        self._rebuild_video_grid(())
+        self.connection_label.setText("Поиск встроенных и USB-камер...")
+        QApplication.processEvents()
+        try:
+            dialog = CameraSelectionDialog(self._saved_cameras, self)
+        except Exception as exc:
+            self._service.configure_cameras(previous)
+            self._rebuild_video_grid(previous)
+            QMessageBox.critical(self, "Ошибка поиска камер", str(exc))
+            return
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            self._service.configure_cameras(previous)
+            self._rebuild_video_grid(previous)
+            self.connection_label.setText("Настройка камер отменена")
+            return
+        selected = dialog.selected_cameras
+        if not selected:
+            QMessageBox.warning(self, "Камеры не выбраны", "Выберите хотя бы одну камеру.")
+            self.connection_label.setText("Камеры не подключены")
+            return
+        try:
+            save_selected_cameras(self._camera_settings_path, list(selected))
+            self._repository.upsert_cameras(selected)
+        except (CameraSettingsError, StorageError) as exc:
+            QMessageBox.critical(self, "Не удалось сохранить камеры", str(exc))
+            self.connection_label.setText("Камеры не подключены")
+            return
+        self._saved_cameras = selected
+        self._rebuild_video_grid(selected)
+        self._service.configure_cameras(selected)
+        self.connection_label.setText(f"Подключение камер: {len(selected)}")
+
+    def _rebuild_video_grid(self, cameras: Any) -> None:
+        while self.video_grid.count():
+            item = self.video_grid.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._video_panels = {}
+        selected = tuple(cameras)
+        if not selected:
+            placeholder = QLabel("Камеры не подключены\nНажмите «Настройка камер»")
+            placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            placeholder.setObjectName("muted")
+            self.video_grid.addWidget(placeholder, 0, 0)
+            return
+        columns = 1 if len(selected) == 1 else 2
+        for index, camera in enumerate(selected):
+            card = QFrame()
+            card.setObjectName("card")
+            layout = QVBoxLayout(card)
+            title = QLabel(camera.name)
+            title.setObjectName("section")
+            panel = VideoPanel()
+            panel.setMinimumSize(320, 220)
+            layout.addWidget(title)
+            layout.addWidget(panel, 1)
+            self.video_grid.addWidget(card, index // columns, index % columns)
+            self._video_panels[camera.id] = panel
+
     def _on_frame(
         self,
         camera_id: str,
         frame: Any,
         candidates: list[PlateCandidate],
     ) -> None:
-        self.camera_label.setText(camera_id)
-        self.connection_label.setText("Камера подключена, распознавание работает")
-        self.video.show_frame(frame, candidates)
+        self.connection_label.setText(
+            f"Подключено камер: {len(self._video_panels)}; распознавание работает"
+        )
+        panel = self._video_panels.get(camera_id)
+        if panel is not None:
+            panel.show_frame(frame, candidates)
+        if self._displayed_plate and any(
+            _candidate_matches(candidate, self._displayed_plate)
+            for candidate in candidates
+        ):
+            self._restart_display_timer()
 
     def _on_event(
         self,
@@ -317,13 +421,32 @@ class MainWindow(QMainWindow):
         decision: AccessDecision,
         requires_approval: bool,
     ) -> None:
+        if self._pending_event_id is not None:
+            outcome = "Ожидает решения" if requires_approval else (
+                "Автоматически подтверждена"
+                if event.decision is DecisionStatus.ALLOWED
+                else "—"
+            )
+            mode = "Ручной" if requires_approval else (
+                "Автоматический"
+                if event.decision is DecisionStatus.ALLOWED
+                else "—"
+            )
+            self._prepend_history_row(event_id, event, outcome, mode)
+            return
         plate = event.normalized_plate or event.raw_text
+        self._displayed_plate = plate
         self.plate_label.setText(plate)
-        self.reason_label.setText(event.reason)
+        self.camera_label.setText(event.camera_id)
+        self.reason_label.setText(_display_reason(event.reason, decision, self._timezone))
         self.confidence_label.setText(f"Уверенность OCR: {event.ocr_confidence:.0%}")
         self._set_status(decision.status)
         self._pending_event_id = event_id if requires_approval else None
         self._set_approval_enabled(requires_approval)
+        if requires_approval:
+            self._display_timer.stop()
+        else:
+            self._restart_display_timer()
         outcome = "Ожидает решения" if requires_approval else (
             "Автоматически подтверждена"
             if event.decision is DecisionStatus.ALLOWED
@@ -390,7 +513,31 @@ class MainWindow(QMainWindow):
             self.history.setItem(row, 5, QTableWidgetItem("Ручной"))
         self._pending_event_id = None
         self._set_approval_enabled(False)
+        self._restart_display_timer()
         self._restore_latest_pending()
+
+    def _restart_display_timer(self) -> None:
+        if self._pending_event_id is not None:
+            self._display_timer.stop()
+            return
+        try:
+            seconds = self._service.display_timeout_seconds
+        except StorageError:
+            seconds = 10
+        self._display_timer.start(seconds * 1000)
+
+    def _clear_current_display(self) -> None:
+        if self._pending_event_id is not None:
+            return
+        self._displayed_plate = None
+        self.camera_label.setText("—")
+        self.plate_label.setText("—")
+        self.status_label.setText("ОЖИДАНИЕ")
+        self.status_label.setStyleSheet(
+            "font-size:25px; font-weight:800; padding:14px; border-radius:10px; background:#263449; color:white;"
+        )
+        self.reason_label.setText("Ожидание автомобиля")
+        self.confidence_label.setText("Уверенность OCR: —")
 
     def _prepend_history_row(
         self,
@@ -448,6 +595,8 @@ class MainWindow(QMainWindow):
         if pending is None:
             return
         self._pending_event_id = int(pending["id"])
+        self._displayed_plate = pending["normalized_plate"]
+        self._display_timer.stop()
         self.plate_label.setText(pending["normalized_plate"])
         self.status_label.setText("ОЖИДАЕТ РЕШЕНИЯ")
         self.status_label.setStyleSheet(
@@ -470,6 +619,7 @@ class MainWindow(QMainWindow):
         if event_id is None:
             return
         self._pending_event_id = int(event_id)
+        self._display_timer.stop()
         plate_item = self.history.item(row, 2)
         if plate_item is not None:
             self.plate_label.setText(plate_item.text())
@@ -558,6 +708,8 @@ class MainWindow(QMainWindow):
     def _reset_after_history_clear(self) -> None:
         self.history.setRowCount(0)
         self._pending_event_id = None
+        self._displayed_plate = None
+        self._display_timer.stop()
         self._set_approval_enabled(False)
         self.plate_label.setText("—")
         self.status_label.setText("ОЖИДАНИЕ")
@@ -596,6 +748,119 @@ def _mode_label(mode: str | None) -> str:
     if mode == "AUTO":
         return "Автоматический"
     return "—"
+
+
+def _candidate_matches(candidate: PlateCandidate, displayed_plate: str) -> bool:
+    return displayed_plate in {
+        candidate.normalized_plate,
+        candidate.raw_text,
+        candidate.canonical_text,
+    }
+
+
+def _display_reason(
+    reason: str,
+    decision: AccessDecision,
+    timezone: ZoneInfo,
+) -> str:
+    if decision.next_allowed_at is None:
+        return reason
+    next_time = decision.next_allowed_at.astimezone(timezone).strftime("%d.%m.%Y %H:%M:%S")
+    return f"{reason}\n\nСледующий допустимый момент:\n{next_time}"
+
+
+class CameraSelectionDialog(QDialog):
+    def __init__(
+        self,
+        saved_cameras: tuple[CameraConfig, ...],
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._saved_sources = {camera.source for camera in saved_cameras}
+        self._checkboxes: dict[int, QCheckBox] = {}
+        self.setWindowTitle("Настройка камер")
+        self.setModal(True)
+        self.setMinimumWidth(520)
+
+        self._layout = QVBoxLayout(self)
+        title = QLabel("Встроенные и USB-камеры")
+        title.setObjectName("section")
+        self._layout.addWidget(title)
+        explanation = QLabel(
+            "Отметьте все камеры, которые должны одновременно распознавать номера. "
+            "Во время поиска видеопотоки временно отключаются."
+        )
+        explanation.setWordWrap(True)
+        explanation.setObjectName("muted")
+        self._layout.addWidget(explanation)
+
+        self._camera_box = QVBoxLayout()
+        self._layout.addLayout(self._camera_box)
+        self._refresh_button = QPushButton("Обновить список")
+        self._refresh_button.clicked.connect(self._refresh)
+        self._layout.addWidget(self._refresh_button)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Подключить выбранные")
+        buttons.accepted.connect(self._accept_selection)
+        buttons.rejected.connect(self.reject)
+        self._layout.addWidget(buttons)
+        self._refresh()
+
+    @property
+    def selected_cameras(self) -> tuple[CameraConfig, ...]:
+        return tuple(
+            CameraConfig(
+                id=f"local-{source}",
+                name=f"Камера {source} (встроенная/USB)",
+                source=source,
+                enabled=True,
+                width=1280,
+                height=720,
+            )
+            for source, checkbox in sorted(self._checkboxes.items())
+            if checkbox.isChecked()
+        )
+
+    def _refresh(self) -> None:
+        checked = {
+            source
+            for source, checkbox in self._checkboxes.items()
+            if checkbox.isChecked()
+        } or set(self._saved_sources)
+        while self._camera_box.count():
+            item = self._camera_box.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._checkboxes = {}
+        self._refresh_button.setEnabled(False)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            cameras = discover_local_cameras()
+        finally:
+            QApplication.restoreOverrideCursor()
+            self._refresh_button.setEnabled(True)
+        if not cameras:
+            label = QLabel("Доступные камеры не найдены. Проверьте подключение и разрешения Windows.")
+            label.setWordWrap(True)
+            label.setObjectName("muted")
+            self._camera_box.addWidget(label)
+            return
+        for camera in cameras:
+            checkbox = QCheckBox(camera.name)
+            checkbox.setChecked(camera.source in checked)
+            self._checkboxes[camera.source] = checkbox
+            self._camera_box.addWidget(checkbox)
+
+    def _accept_selection(self) -> None:
+        if not self.selected_cameras:
+            QMessageBox.warning(self, "Камеры не выбраны", "Выберите хотя бы одну камеру.")
+            return
+        self.accept()
 
 
 class PasswordDialog(QDialog):
@@ -673,6 +938,20 @@ class AdminPanelDialog(QDialog):
         explanation.setWordWrap(True)
         layout.addWidget(explanation)
 
+        timeout_form = QFormLayout()
+        self.timeout_spin = QSpinBox()
+        self.timeout_spin.setRange(3, 120)
+        self.timeout_spin.setSuffix(" сек.")
+        try:
+            self.timeout_spin.setValue(self._plate_service.display_timeout_seconds)
+        except StorageError:
+            self.timeout_spin.setValue(10)
+        timeout_form.addRow("Показывать последний номер:", self.timeout_spin)
+        layout.addLayout(timeout_form)
+        self.save_timeout_button = QPushButton("Сохранить время отображения")
+        self.save_timeout_button.clicked.connect(self._save_display_timeout)
+        layout.addWidget(self.save_timeout_button)
+
         self.summary_label = QLabel()
         self.summary_label.setWordWrap(True)
         self.summary_label.setObjectName("muted")
@@ -687,6 +966,18 @@ class AdminPanelDialog(QDialog):
         close_button.rejected.connect(self.reject)
         layout.addWidget(close_button)
         self._refresh_summary()
+
+    def _save_display_timeout(self) -> None:
+        try:
+            self._plate_service.set_display_timeout_seconds(self.timeout_spin.value())
+        except (StorageError, ValueError) as exc:
+            QMessageBox.critical(self, "Настройка не сохранена", str(exc))
+            return
+        QMessageBox.information(
+            self,
+            "Настройка сохранена",
+            f"Последний номер будет отображаться {self.timeout_spin.value()} секунд.",
+        )
 
     def _refresh_summary(self) -> None:
         try:

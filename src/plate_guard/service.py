@@ -60,6 +60,8 @@ class PlateGuardService:
         self._stop_event = threading.Event()
         self._mode_lock = threading.Lock()
         self._processing_lock = threading.RLock()
+        self._camera_lock = threading.RLock()
+        self._running = False
         self._manual_approval_enabled = repository.manual_approval_enabled(
             config.app.manual_approval_enabled
         )
@@ -73,8 +75,9 @@ class PlateGuardService:
             maxsize=config.app.frame_queue_size
         )
         self._consensus = self._create_consensus()
+        self._active_cameras = config.enabled_cameras
         self._cameras = CameraManager(
-            cameras=config.enabled_cameras,
+            cameras=self._active_cameras,
             output_queue=self._frames,
             process_every_n_frames=config.app.process_every_n_frames,
             retry_seconds=config.app.camera_retry_seconds,
@@ -101,6 +104,13 @@ class PlateGuardService:
         with self._mode_lock:
             self._manual_approval_enabled = enabled
 
+    @property
+    def display_timeout_seconds(self) -> int:
+        return self._repository.display_timeout_seconds(default=10)
+
+    def set_display_timeout_seconds(self, seconds: int) -> None:
+        self._repository.set_display_timeout_seconds(seconds)
+
     def resolve_manual_decision(
         self,
         recognition_id: int,
@@ -115,11 +125,47 @@ class PlateGuardService:
             decided_at=decided_at or datetime.now(UTC),
         )
 
+    @property
+    def active_cameras(self) -> tuple[Any, ...]:
+        with self._camera_lock:
+            return tuple(self._active_cameras)
+
+    def configure_cameras(self, cameras: Sequence[Any]) -> None:
+        selected = tuple(camera for camera in cameras if camera.enabled)
+        with self._camera_lock:
+            if self._running:
+                self._cameras.stop()
+            self._active_cameras = selected
+            self._cameras = self._create_camera_manager(selected)
+            self._consensus = self._create_consensus()
+            self._clear_frame_queue()
+            if self._running:
+                self._cameras.start()
+
+    def _create_camera_manager(self, cameras: Sequence[Any]) -> CameraManager:
+        return CameraManager(
+            cameras=cameras,
+            output_queue=self._frames,
+            process_every_n_frames=self._config.app.process_every_n_frames,
+            retry_seconds=self._config.app.camera_retry_seconds,
+            error_handler=self._handle_camera_error,
+        )
+
+    def _clear_frame_queue(self) -> None:
+        while True:
+            try:
+                self._frames.get_nowait()
+            except queue.Empty:
+                return
+
     def run(self) -> None:
         self._stop_event.clear()
         self._config.app.captures_directory.mkdir(parents=True, exist_ok=True)
-        self._cameras.start()
-        LOGGER.info("Запущено камер: %d", len(self._config.enabled_cameras))
+        with self._camera_lock:
+            self._running = True
+            self._cameras.start()
+            camera_count = len(self._active_cameras)
+        LOGGER.info("Запущено камер: %d", camera_count)
         print("Система запущена. Для остановки нажмите Ctrl+C.")
         try:
             while not self._stop_event.is_set():
@@ -131,7 +177,9 @@ class PlateGuardService:
         except KeyboardInterrupt:
             print("\nОстановка системы...")
         finally:
-            self._cameras.stop()
+            with self._camera_lock:
+                self._cameras.stop()
+                self._running = False
 
     def stop(self) -> None:
         self._stop_event.set()

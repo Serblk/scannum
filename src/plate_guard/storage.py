@@ -338,6 +338,49 @@ class SQLiteRepository:
             return default
         return row["value"] == "1"
 
+    def set_display_timeout_seconds(self, seconds: int) -> None:
+        if isinstance(seconds, bool) or not 3 <= seconds <= 120:
+            raise ValueError("Время отображения должно быть от 3 до 120 секунд")
+        self._set_setting("display_timeout_seconds", str(seconds))
+
+    def display_timeout_seconds(self, default: int = 10) -> int:
+        if not 3 <= default <= 120:
+            raise ValueError("Значение по умолчанию должно быть от 3 до 120 секунд")
+        value = self._get_setting("display_timeout_seconds")
+        if value is None:
+            return default
+        try:
+            seconds = int(value)
+        except ValueError:
+            return default
+        return seconds if 3 <= seconds <= 120 else default
+
+    def _set_setting(self, key: str, value: str) -> None:
+        try:
+            with self._connection() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO settings (key, value, updated_at)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET
+                        value = excluded.value,
+                        updated_at = excluded.updated_at
+                    """,
+                    (key, value, _to_db_datetime(datetime.now(UTC))),
+                )
+        except sqlite3.Error as exc:
+            raise StorageError(f"Не удалось сохранить настройку {key}: {exc}") from exc
+
+    def _get_setting(self, key: str) -> str | None:
+        try:
+            with self._connection() as connection:
+                row = connection.execute(
+                    "SELECT value FROM settings WHERE key = ?", (key,)
+                ).fetchone()
+        except sqlite3.Error as exc:
+            raise StorageError(f"Не удалось прочитать настройку {key}: {exc}") from exc
+        return str(row["value"]) if row else None
+
     def admin_password_hash(self) -> str | None:
         try:
             with self._connection() as connection:

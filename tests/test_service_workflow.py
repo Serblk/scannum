@@ -105,6 +105,16 @@ class ServiceWorkflowTests(unittest.TestCase):
         service._process_frame(self._packet(self.started_at + timedelta(minutes=2)))
         self.assertEqual(events[-1][1], DecisionStatus.DENIED)
 
+    def test_can_replace_active_camera_set_before_start(self) -> None:
+        service = self._service([])
+        second = CameraConfig("camera-2", "Камера 2", 1)
+
+        service.configure_cameras((self.camera, second))
+
+        self.assertEqual(service.active_cameras, (self.camera, second))
+        service.configure_cameras(())
+        self.assertEqual(service.active_cameras, ())
+
     def _service(
         self, events: list[tuple[int, DecisionStatus, bool]]
     ) -> PlateGuardService:

@@ -110,6 +110,15 @@ class SQLiteRepositoryTests(unittest.TestCase):
         self.repository.set_manual_approval_enabled(False)
         self.assertFalse(self.repository.manual_approval_enabled(default=True))
 
+    def test_display_timeout_uses_default_validates_and_persists(self) -> None:
+        self.assertEqual(self.repository.display_timeout_seconds(), 10)
+        self.repository.set_display_timeout_seconds(25)
+        self.assertEqual(self.repository.display_timeout_seconds(), 25)
+        with self.assertRaises(ValueError):
+            self.repository.set_display_timeout_seconds(2)
+        with self.assertRaises(ValueError):
+            self.repository.set_display_timeout_seconds(121)
+
     def _event(self, status: DecisionStatus) -> RecognitionEvent:
         return RecognitionEvent(
             camera_id="camera-1",

@@ -3,14 +3,17 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from datetime import UTC, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtWidgets import QApplication
 
 from plate_guard.config import AppConfig, CameraConfig, ProjectConfig, RecognitionConfig
-from plate_guard.gui import MainWindow
+from plate_guard.gui import MainWindow, _display_reason
+from plate_guard.models import AccessDecision, DecisionStatus
 from plate_guard.service import PlateGuardService
 from plate_guard.storage import SQLiteRepository
 
@@ -59,8 +62,38 @@ class GuiSmokeTests(unittest.TestCase):
             try:
                 self.assertEqual(window.admin_button.text(), "Администрирование")
                 self.assertTrue(window.admin_button.isEnabled())
+                self.assertEqual(window.camera_settings_button.text(), "Настройка камер")
+                self.assertEqual(service.active_cameras, ())
+                cameras = tuple(
+                    CameraConfig(f"camera-{index}", f"Камера {index}", index)
+                    for index in range(4)
+                )
+                window._rebuild_video_grid(cameras)
+                self.assertEqual(set(window._video_panels), {camera.id for camera in cameras})
+                window._displayed_plate = "А123ВС77"
+                window.plate_label.setText("А123ВС77")
+                window._clear_current_display()
+                self.assertEqual(window.plate_label.text(), "—")
+                window._pending_event_id = 42
+                window.plate_label.setText("А123ВС77")
+                window._clear_current_display()
+                self.assertEqual(window.plate_label.text(), "А123ВС77")
             finally:
                 window.close()
+
+    def test_denied_reason_contains_next_allowed_local_time(self) -> None:
+        decision = AccessDecision(
+            DecisionStatus.DENIED,
+            "Ещё не прошло восемь часов",
+            next_allowed_at=datetime(2026, 7, 11, 8, 43, 6, tzinfo=UTC),
+        )
+        text = _display_reason(
+            decision.reason,
+            decision,
+            ZoneInfo("Europe/Moscow"),
+        )
+        self.assertIn("Следующий допустимый момент", text)
+        self.assertIn("11.07.2026 11:43:06", text)
 
 
 if __name__ == "__main__":
