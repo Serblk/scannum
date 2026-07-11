@@ -10,11 +10,9 @@ if ($LASTEXITCODE -ne 0) {
     throw "Сборка EXE завершилась с ошибкой"
 }
 
-$Archive = Join-Path $PSScriptRoot "dist\ScanNum-0.4.2-win64.zip"
-if (Test-Path $Archive) {
-    Remove-Item $Archive -Force
+& $Python (Join-Path $PSScriptRoot "package_release.py")
+if ($LASTEXITCODE -ne 0) {
+    throw "Упаковка ZIP завершилась с ошибкой"
 }
-Compress-Archive -Path (Join-Path $PSScriptRoot "dist\ScanNum\*") -DestinationPath $Archive
 
 Write-Host "EXE: $PSScriptRoot\dist\ScanNum\ScanNum.exe"
-Write-Host "Архив для переноса: $Archive"

@@ -64,6 +64,7 @@ class GuiSmokeTests(unittest.TestCase):
                 self.assertEqual(window.admin_button.text(), "Администрирование")
                 self.assertTrue(window.admin_button.isEnabled())
                 self.assertEqual(window.camera_settings_button.text(), "Настройка камер")
+                self.assertEqual(window.open_data_button.text(), "Открыть папку данных")
                 self.assertEqual(service.active_cameras, ())
                 header = window.history.horizontalHeader()
                 self.assertEqual(

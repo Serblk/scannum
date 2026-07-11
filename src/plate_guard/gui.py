@@ -37,8 +37,17 @@ def run_gui(
     return int(application.exec())
 
 
-from PySide6.QtCore import Qt, QTimer, Signal, QObject
-from PySide6.QtGui import QColor, QCloseEvent, QFont, QImage, QPainter, QPen, QPixmap
+from PySide6.QtCore import Qt, QTimer, QUrl, Signal, QObject
+from PySide6.QtGui import (
+    QColor,
+    QCloseEvent,
+    QDesktopServices,
+    QFont,
+    QImage,
+    QPainter,
+    QPen,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -193,6 +202,10 @@ class MainWindow(QMainWindow):
         self.admin_button = QPushButton("Администрирование")
         self.admin_button.clicked.connect(self._open_administration)
         header.addWidget(self.admin_button)
+
+        self.open_data_button = QPushButton("Открыть папку данных")
+        self.open_data_button.clicked.connect(self._open_data_directory)
+        header.addWidget(self.open_data_button)
 
         self.camera_settings_button = QPushButton("Настройка камер")
         self.camera_settings_button.clicked.connect(self._open_camera_settings)
@@ -375,6 +388,20 @@ class MainWindow(QMainWindow):
         self._rebuild_video_grid(selected)
         self._service.configure_cameras(selected)
         self.connection_label.setText(f"Подключение камер: {len(selected)}")
+
+    def _open_data_directory(self) -> None:
+        data_directory = self._config.app.database_path.parent.parent
+        try:
+            data_directory.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            QMessageBox.critical(self, "Не удалось открыть данные", str(exc))
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(data_directory))):
+            QMessageBox.warning(
+                self,
+                "Не удалось открыть данные",
+                f"Откройте папку вручную:\n{data_directory}",
+            )
 
     def _rebuild_video_grid(self, cameras: Any) -> None:
         while self.video_grid.count():

@@ -33,7 +33,46 @@ def prepare_user_data_directory() -> Path:
     resources = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
     _copy_once(resources / "config.toml", target / "config.toml")
     _copy_tree_once(resources / "models" / "cache", target / "models" / "cache")
+    _migrate_operator_data_layout(target)
     return target
+
+
+def _migrate_operator_data_layout(target: Path) -> None:
+    marker = target / ".operator-layout-v1"
+    if marker.exists():
+        return
+
+    mappings = (
+        (target / "data", target / "База"),
+        (target / "captures", target / "Фотографии"),
+        (target / "reports", target / "Excel"),
+    )
+    try:
+        for source, destination in mappings:
+            if source.is_dir() and not destination.exists():
+                temporary = destination.with_name(f".{destination.name}.migration")
+                if temporary.exists():
+                    shutil.rmtree(temporary)
+                shutil.copytree(source, temporary)
+                temporary.replace(destination)
+            else:
+                destination.mkdir(parents=True, exist_ok=True)
+
+        config_path = target / "config.toml"
+        text = config_path.read_text(encoding="utf-8")
+        replacements = {
+            'database_path = "data/system.db"': 'database_path = "База/system.db"',
+            'captures_directory = "captures"': 'captures_directory = "Фотографии"',
+            'reports_directory = "reports"': 'reports_directory = "Excel"',
+        }
+        for old, new in replacements.items():
+            text = text.replace(old, new)
+        temporary_config = config_path.with_suffix(".toml.migration")
+        temporary_config.write_text(text, encoding="utf-8")
+        temporary_config.replace(config_path)
+        marker.write_text("1", encoding="ascii")
+    except OSError as exc:
+        raise RuntimeSetupError(f"Не удалось подготовить папки данных: {exc}") from exc
 
 
 def _copy_once(source: Path, target: Path) -> None:
