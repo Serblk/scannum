@@ -28,6 +28,24 @@ class _FakeRecognizer:
         ]
 
 
+class _SequenceRecognizer:
+    def __init__(self, plates: list[str]) -> None:
+        self._plates = iter(plates)
+
+    def recognize(self, frame: object) -> list[PlateCandidate]:
+        plate = next(self._plates)
+        return [
+            PlateCandidate(
+                raw_text=plate,
+                canonical_text=plate,
+                normalized_plate=plate,
+                ocr_confidence=0.95,
+                detection_confidence=0.96,
+                bounding_box=(5, 5, 80, 30),
+            )
+        ]
+
+
 class ServiceWorkflowTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary_directory = tempfile.TemporaryDirectory()
@@ -66,8 +84,8 @@ class ServiceWorkflowTests(unittest.TestCase):
         events: list[tuple[int, DecisionStatus, bool]] = []
         service = self._service(events)
 
-        service._process_frame(self._packet(self.started_at))
-        service._process_frame(self._packet(self.started_at + timedelta(minutes=1)))
+        self._scan(service, self.started_at)
+        self._scan(service, self.started_at + timedelta(minutes=1))
 
         rows = list(reversed(self.repository.recent_recognitions(10)))
         self.assertEqual([row["decision"] for row in rows], ["ALLOWED", "DENIED"])
@@ -80,7 +98,7 @@ class ServiceWorkflowTests(unittest.TestCase):
         events: list[tuple[int, DecisionStatus, bool]] = []
         service = self._service(events)
 
-        service._process_frame(self._packet(self.started_at))
+        self._scan(service, self.started_at)
         first_id = events[-1][0]
         self.assertTrue(events[-1][2])
         self.assertIsNone(self.repository.last_confirmed_fueling("А030ВС77"))
@@ -92,7 +110,7 @@ class ServiceWorkflowTests(unittest.TestCase):
         )
         self.assertIsNone(self.repository.last_confirmed_fueling("А030ВС77"))
 
-        service._process_frame(self._packet(self.started_at + timedelta(minutes=1)))
+        self._scan(service, self.started_at + timedelta(minutes=1))
         second_id = events[-1][0]
         self.assertNotEqual(first_id, second_id)
         service.resolve_manual_decision(
@@ -102,7 +120,7 @@ class ServiceWorkflowTests(unittest.TestCase):
         )
         self.assertIsNotNone(self.repository.last_confirmed_fueling("А030ВС77"))
 
-        service._process_frame(self._packet(self.started_at + timedelta(minutes=2)))
+        self._scan(service, self.started_at + timedelta(minutes=2))
         self.assertEqual(events[-1][1], DecisionStatus.DENIED)
 
     def test_can_replace_active_camera_set_before_start(self) -> None:
@@ -114,6 +132,25 @@ class ServiceWorkflowTests(unittest.TestCase):
         self.assertEqual(service.active_cameras, (self.camera, second))
         service.configure_cameras(())
         self.assertEqual(service.active_cameras, ())
+
+    def test_ambiguous_ocr_creates_one_review_without_fueling(self) -> None:
+        recognizer = _SequenceRecognizer(
+            ["С888КТ197", "С888КГ197", "С888КТ197", "С888КГ197"]
+        )
+        service = PlateGuardService(
+            self.config,
+            self.repository,
+            recognizer,  # type: ignore[arg-type]
+        )
+
+        self._scan(service, self.started_at)
+
+        rows = self.repository.recent_recognitions(10)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["decision"], "REVIEW")
+        self.assertIsNone(rows[0]["normalized_plate"])
+        self.assertIn("OCR не смог однозначно определить номер", rows[0]["reason"])
+        self.assertIsNone(self.repository.last_confirmed_fueling("С888КТ197"))
 
     def _service(
         self, events: list[tuple[int, DecisionStatus, bool]]
@@ -129,6 +166,10 @@ class ServiceWorkflowTests(unittest.TestCase):
 
     def _packet(self, observed_at: datetime) -> FramePacket:
         return FramePacket("camera-1", observed_at, self.frame)
+
+    def _scan(self, service: PlateGuardService, started_at: datetime) -> None:
+        for seconds in range(4):
+            service._process_frame(self._packet(started_at + timedelta(seconds=seconds)))
 
 
 if __name__ == "__main__":

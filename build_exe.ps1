@@ -10,7 +10,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Сборка EXE завершилась с ошибкой"
 }
 
-$Archive = Join-Path $PSScriptRoot "dist\ScanNum-0.3.0-win64.zip"
+$Archive = Join-Path $PSScriptRoot "dist\ScanNum-0.4.0-win64.zip"
 if (Test-Path $Archive) {
     Remove-Item $Archive -Force
 }

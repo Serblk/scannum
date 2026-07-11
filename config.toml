@@ -6,10 +6,10 @@ timezone = "Europe/Moscow"
 process_every_n_frames = 3
 frame_queue_size = 8
 camera_retry_seconds = 5.0
-confirmations_required = 3
+confirmations_required = 4
 confirmation_window_seconds = 3.0
 duplicate_cooldown_seconds = 30.0
-minimum_ocr_confidence = 0.65
+minimum_ocr_confidence = 0.70
 fueling_interval_hours = 8
 manual_approval_enabled = true
 

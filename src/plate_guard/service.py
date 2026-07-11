@@ -198,12 +198,12 @@ class PlateGuardService:
 
     def _create_consensus(self) -> TemporalConsensus:
         return TemporalConsensus(
-            confirmations_required=self._config.app.confirmations_required,
+            confirmations_required=max(4, self._config.app.confirmations_required),
             window=timedelta(seconds=self._config.app.confirmation_window_seconds),
             duplicate_cooldown=timedelta(
                 seconds=self._config.app.duplicate_cooldown_seconds
             ),
-            minimum_ocr_confidence=self._config.app.minimum_ocr_confidence,
+            minimum_ocr_confidence=max(0.70, self._config.app.minimum_ocr_confidence),
         )
 
     def _process_frame(self, packet: FramePacket) -> None:
@@ -222,17 +222,21 @@ class PlateGuardService:
         if self._frame_handler is not None:
             self._frame_handler(packet.camera_id, packet.frame, candidates)
 
-        for candidate in candidates:
-            confirmed = self._consensus.observe(
-                camera_id=packet.camera_id,
-                candidate=candidate,
-                observed_at=packet.observed_at,
-                frame=packet.frame,
+        confirmed_results = self._consensus.observe_many(
+            camera_id=packet.camera_id,
+            candidates=candidates,
+            observed_at=packet.observed_at,
+            frame=packet.frame,
+        )
+        for confirmed in confirmed_results:
+            decision = (
+                AccessDecision(DecisionStatus.REVIEW, confirmed.review_reason)
+                if confirmed.review_reason is not None
+                else self._decide(
+                    confirmed.candidate.normalized_plate,
+                    confirmed.observed_at,
+                )
             )
-            if confirmed is None:
-                continue
-
-            decision = self._decide(confirmed.candidate.normalized_plate, confirmed.observed_at)
             manual_mode = self.manual_approval_enabled
             if (
                 manual_mode
@@ -265,7 +269,11 @@ class PlateGuardService:
                 camera_id=confirmed.camera_id,
                 observed_at=confirmed.observed_at,
                 raw_text=confirmed.candidate.raw_text,
-                normalized_plate=confirmed.candidate.normalized_plate,
+                normalized_plate=(
+                    None
+                    if confirmed.review_reason is not None
+                    else confirmed.candidate.normalized_plate
+                ),
                 ocr_confidence=confirmed.average_ocr_confidence,
                 detection_confidence=confirmed.candidate.detection_confidence,
                 decision=decision.status,

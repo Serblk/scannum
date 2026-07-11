@@ -44,6 +44,7 @@ class ConfirmedRecognition:
     observed_at: datetime
     average_ocr_confidence: float
     frame: Any
+    review_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
