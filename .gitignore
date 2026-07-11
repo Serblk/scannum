@@ -11,6 +11,9 @@ data/*.db-*
 captures/*
 reports/*
 models/cache/
+build/
+dist/
+*.spec.bak
 !data/.gitkeep
 !captures/.gitkeep
 !reports/.gitkeep

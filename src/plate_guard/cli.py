@@ -12,11 +12,12 @@ from .config import ConfigError, ProjectConfig, load_config
 from .exporter import ExportError, export_to_xlsx
 from .plates import PlateValidationError, normalize_plate
 from .recognizer import FastAlprRecognizer, RecognitionDependencyError
+from .runtime import RuntimeSetupError, default_config_path
 from .service import PlateGuardService, ServiceConfigurationError
 from .storage import SQLiteRepository, StorageError
 
 
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[2] / "config.toml"
+DEFAULT_CONFIG_PATH = default_config_path()
 
 
 class GuiDependencyError(RuntimeError):
@@ -59,6 +60,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ServiceConfigurationError,
         ExportError,
         PlateValidationError,
+        RuntimeSetupError,
         LookupError,
     ) as exc:
         print(f"ОШИБКА: {exc}", file=sys.stderr)
