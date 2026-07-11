@@ -9,10 +9,11 @@ from zoneinfo import ZoneInfo
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QHeaderView
 
+from plate_guard.admin import HistoryPreview
 from plate_guard.config import AppConfig, CameraConfig, ProjectConfig, RecognitionConfig
-from plate_guard.gui import MainWindow, _display_reason
+from plate_guard.gui import HistoryClearConfirmation, MainWindow, _display_reason
 from plate_guard.models import AccessDecision, DecisionStatus
 from plate_guard.service import PlateGuardService
 from plate_guard.storage import SQLiteRepository
@@ -64,6 +65,15 @@ class GuiSmokeTests(unittest.TestCase):
                 self.assertTrue(window.admin_button.isEnabled())
                 self.assertEqual(window.camera_settings_button.text(), "Настройка камер")
                 self.assertEqual(service.active_cameras, ())
+                header = window.history.horizontalHeader()
+                self.assertEqual(
+                    header.sectionResizeMode(0),
+                    QHeaderView.ResizeMode.ResizeToContents,
+                )
+                self.assertEqual(
+                    header.sectionResizeMode(5),
+                    QHeaderView.ResizeMode.Stretch,
+                )
                 cameras = tuple(
                     CameraConfig(f"camera-{index}", f"Камера {index}", index)
                     for index in range(4)
@@ -94,6 +104,17 @@ class GuiSmokeTests(unittest.TestCase):
         )
         self.assertIn("Следующий допустимый момент", text)
         self.assertIn("11.07.2026 11:43:06", text)
+
+    def test_history_clear_confirmation_uses_russian_buttons(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        dialog = HistoryClearConfirmation(HistoryPreview(1, 2, 3, 4, 5))
+        try:
+            self.assertEqual(dialog.delete_button.text(), "Да, удалить")
+            self.assertEqual(dialog.cancel_button.text(), "Отмена")
+            dialog.delete_button.click()
+            self.assertTrue(dialog.confirmed)
+        finally:
+            dialog.close()
 
 
 if __name__ == "__main__":

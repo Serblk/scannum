@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QFormLayout,
     QGridLayout,
+    QHeaderView,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -233,7 +234,14 @@ class MainWindow(QMainWindow):
         self.history.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.history.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.history.verticalHeader().setVisible(False)
-        self.history.horizontalHeader().setStretchLastSection(True)
+        history_header = self.history.horizontalHeader()
+        history_header.setMinimumSectionSize(80)
+        history_header.setMaximumSectionSize(320)
+        for column in range(5):
+            history_header.setSectionResizeMode(
+                column, QHeaderView.ResizeMode.ResizeToContents
+            )
+        history_header.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
         self.history.setMinimumHeight(180)
         self.history.itemSelectionChanged.connect(self._select_history_pending)
         root.addWidget(self.history, 2)
@@ -558,6 +566,7 @@ class MainWindow(QMainWindow):
         ]
         for column, value in enumerate(values):
             item = QTableWidgetItem(value)
+            item.setToolTip(value)
             item.setData(Qt.ItemDataRole.UserRole, event_id)
             self.history.setItem(0, column, item)
         return 0
@@ -583,6 +592,7 @@ class MainWindow(QMainWindow):
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(value)
+                item.setToolTip(value)
                 item.setData(Qt.ItemDataRole.UserRole, row["id"])
                 self.history.setItem(0, column, item)
 
@@ -1000,19 +1010,12 @@ class AdminPanelDialog(QDialog):
         except (AdminError, StorageError) as exc:
             QMessageBox.critical(self, "Не удалось прочитать историю", str(exc))
             return
-        answer = QMessageBox.warning(
-            self,
-            "Необратимая очистка",
-            "Будут безвозвратно удалены:\n"
-            f"• {preview.recognitions} событий\n"
-            f"• {preview.fuelings} заправок\n"
-            f"• {preview.errors} ошибок\n"
-            f"• {preview.photos} фотографий\n\n"
-            "Продолжить?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+        confirmation = HistoryClearConfirmation(
+            preview=preview,
+            parent=self,
         )
-        if answer is not QMessageBox.StandardButton.Yes:
+        confirmation.exec()
+        if not confirmation.confirmed:
             return
 
         password_dialog = PasswordDialog(
@@ -1046,3 +1049,32 @@ class AdminPanelDialog(QDialog):
             QMessageBox.warning(self, "Очистка завершена с предупреждением", message + "\n\n" + result.cleanup_warning)
         else:
             QMessageBox.information(self, "Очистка завершена", message)
+
+
+class HistoryClearConfirmation(QMessageBox):
+    def __init__(self, preview: Any, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setIcon(QMessageBox.Icon.Warning)
+        self.setWindowTitle("Необратимая очистка")
+        self.setText(
+            "Будут безвозвратно удалены:\n"
+            f"• {preview.recognitions} событий\n"
+            f"• {preview.fuelings} заправок\n"
+            f"• {preview.errors} ошибок\n"
+            f"• {preview.photos} фотографий\n\n"
+            "Продолжить?"
+        )
+        self.delete_button = self.addButton(
+            "Да, удалить",
+            QMessageBox.ButtonRole.DestructiveRole,
+        )
+        self.cancel_button = self.addButton(
+            "Отмена",
+            QMessageBox.ButtonRole.RejectRole,
+        )
+        self.setDefaultButton(self.cancel_button)
+        self.setEscapeButton(self.cancel_button)
+
+    @property
+    def confirmed(self) -> bool:
+        return self.clickedButton() is self.delete_button

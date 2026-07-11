@@ -182,7 +182,7 @@ powershell -ExecutionPolicy Bypass -File .\build_exe.ps1
 
 `ExecutionPolicy Bypass` применяется только к этому одному запуску PowerShell и
 не меняет системную политику. Для переноса на другой компьютер используется
-`dist/ScanNum-0.4.0-win64.zip`: распакуйте весь архив и запустите `ScanNum.exe`.
+`dist/ScanNum-0.4.2-win64.zip`: распакуйте весь архив и запустите `ScanNum.exe`.
 
 ## Выбор нескольких камер
 
