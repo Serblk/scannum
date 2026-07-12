@@ -111,6 +111,13 @@ class PlateGuardService:
     def set_display_timeout_seconds(self, seconds: int) -> None:
         self._repository.set_display_timeout_seconds(seconds)
 
+    @property
+    def history_visible_columns(self) -> tuple[str, ...]:
+        return self._repository.history_visible_columns()
+
+    def set_history_visible_columns(self, columns: Sequence[str]) -> None:
+        self._repository.set_history_visible_columns(columns)
+
     def resolve_manual_decision(
         self,
         recognition_id: int,

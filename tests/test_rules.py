@@ -22,6 +22,12 @@ class AccessRuleTests(unittest.TestCase):
     def test_parity_mismatch_is_denied(self) -> None:
         result = evaluate_access("А130ВС77", datetime(2026, 7, 10, 12, tzinfo=MOSCOW), None)
         self.assertEqual(result.status, DecisionStatus.DENIED)
+        self.assertIn("(0, 2, 4, 6, 8)", result.reason)
+
+    def test_odd_day_denial_explains_odd_digits(self) -> None:
+        result = evaluate_access("А030ВС77", datetime(2026, 7, 11, 12, tzinfo=MOSCOW), None)
+        self.assertEqual(result.status, DecisionStatus.DENIED)
+        self.assertIn("(1, 3, 5, 7, 9)", result.reason)
 
     def test_attempt_before_eight_hours_is_denied(self) -> None:
         last = datetime(2026, 7, 10, 1, tzinfo=UTC)

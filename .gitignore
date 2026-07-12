@@ -1,6 +1,5 @@
 .venv/
-.idea/workspace.xml
-.idea/shelf/
+.idea/
 __pycache__/
 *.py[cod]
 .pytest_cache/

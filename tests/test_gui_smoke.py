@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QApplication, QHeaderView
 from plate_guard.admin import HistoryPreview
 from plate_guard.config import AppConfig, CameraConfig, ProjectConfig, RecognitionConfig
 from plate_guard.gui import HistoryClearConfirmation, MainWindow, _display_reason
-from plate_guard.models import AccessDecision, DecisionStatus
+from plate_guard.models import AccessDecision, DecisionStatus, RecognitionEvent
 from plate_guard.service import PlateGuardService
 from plate_guard.storage import SQLiteRepository
 
@@ -75,6 +75,12 @@ class GuiSmokeTests(unittest.TestCase):
                     header.sectionResizeMode(5),
                     QHeaderView.ResizeMode.Stretch,
                 )
+                service.set_history_visible_columns(("time", "plate", "decision"))
+                window._apply_history_column_visibility()
+                self.assertFalse(window.history.isColumnHidden(0))
+                self.assertTrue(window.history.isColumnHidden(1))
+                self.assertFalse(window.history.isColumnHidden(2))
+                self.assertTrue(window.history.isColumnHidden(5))
                 cameras = tuple(
                     CameraConfig(f"camera-{index}", f"Камера {index}", index)
                     for index in range(4)
@@ -116,6 +122,64 @@ class GuiSmokeTests(unittest.TestCase):
             self.assertTrue(dialog.confirmed)
         finally:
             dialog.close()
+
+    def test_new_vehicle_replaces_pending_vehicle_but_old_row_stays_highlighted(self) -> None:
+        application = QApplication.instance() or QApplication([])
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            camera = CameraConfig("camera-1", "Камера 1", 0)
+            config = ProjectConfig(
+                app=AppConfig(
+                    database_path=root / "data/system.db",
+                    captures_directory=root / "captures",
+                    reports_directory=root / "reports",
+                    timezone="Europe/Moscow",
+                    process_every_n_frames=1,
+                    frame_queue_size=2,
+                    camera_retry_seconds=1.0,
+                    confirmations_required=4,
+                    confirmation_window_seconds=3.0,
+                    duplicate_cooldown_seconds=30.0,
+                    minimum_ocr_confidence=0.7,
+                    fueling_interval_hours=8,
+                    manual_approval_enabled=True,
+                ),
+                recognition=RecognitionConfig("detector", "ocr", "cpu", root / "models"),
+                cameras=(camera,),
+            )
+            repository = SQLiteRepository(config.app.database_path)
+            repository.initialize()
+            repository.upsert_cameras([camera])
+            service = PlateGuardService(config, repository, _NoopRecognizer())  # type: ignore[arg-type]
+            window = MainWindow(config, repository, service)
+            try:
+                def event(plate: str, decision: DecisionStatus) -> RecognitionEvent:
+                    return RecognitionEvent(
+                        camera_id="camera-1",
+                        observed_at=datetime.now(UTC),
+                        raw_text=plate,
+                        normalized_plate=plate,
+                        ocr_confidence=0.95,
+                        detection_confidence=0.95,
+                        decision=decision,
+                        reason="test",
+                        image_path=None,
+                    )
+
+                first = event("С888КТ197", DecisionStatus.ALLOWED)
+                window._on_event(
+                    1, first, AccessDecision(DecisionStatus.ALLOWED, "ok"), True
+                )
+                second = event("А123ВС77", DecisionStatus.DENIED)
+                window._on_event(
+                    2, second, AccessDecision(DecisionStatus.DENIED, "denied"), False
+                )
+
+                self.assertEqual(window.plate_label.text(), "А123ВС77")
+                self.assertEqual(window.history.item(1, 4).text(), "Ожидает решения")
+                self.assertTrue(window.history.item(1, 0).font().bold())
+            finally:
+                window.close()
 
 
 if __name__ == "__main__":

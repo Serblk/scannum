@@ -25,9 +25,11 @@ def evaluate_access(
     day_is_even = observed_at.day % 2 == 0
     if number_is_even != day_is_even:
         expected = "чётной" if day_is_even else "нечётной"
+        expected_digits = "0, 2, 4, 6, 8" if day_is_even else "1, 3, 5, 7, 9"
         return AccessDecision(
             DecisionStatus.DENIED,
-            f"Сегодня допускаются номера с {expected} первой цифрой числовой части",
+            f"Сегодня допускаются номера с {expected} первой цифрой числовой части "
+            f"({expected_digits})",
         )
 
     if last_confirmed_fueling_at is None:

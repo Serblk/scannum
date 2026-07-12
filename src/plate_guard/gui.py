@@ -22,7 +22,22 @@ from .config import CameraConfig, ProjectConfig
 from .exporter import ExportError, export_to_xlsx
 from .models import AccessDecision, DecisionStatus, PlateCandidate, RecognitionEvent
 from .service import PlateGuardService
-from .storage import SQLiteRepository, StorageError
+from .storage import (
+    HISTORY_COLUMNS,
+    MANDATORY_HISTORY_COLUMNS,
+    SQLiteRepository,
+    StorageError,
+)
+
+
+_HISTORY_COLUMN_LABELS = {
+    "time": "Время",
+    "camera": "Камера",
+    "plate": "Номер",
+    "decision": "Проверка",
+    "fueling": "Заправка",
+    "mode": "Режим",
+}
 
 
 def run_gui(
@@ -255,6 +270,7 @@ class MainWindow(QMainWindow):
                 column, QHeaderView.ResizeMode.ResizeToContents
             )
         history_header.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
+        self._apply_history_column_visibility()
         self.history.setMinimumHeight(180)
         self.history.itemSelectionChanged.connect(self._select_history_pending)
         root.addWidget(self.history, 2)
@@ -456,19 +472,6 @@ class MainWindow(QMainWindow):
         decision: AccessDecision,
         requires_approval: bool,
     ) -> None:
-        if self._pending_event_id is not None:
-            outcome = "Ожидает решения" if requires_approval else (
-                "Автоматически подтверждена"
-                if event.decision is DecisionStatus.ALLOWED
-                else "—"
-            )
-            mode = "Ручной" if requires_approval else (
-                "Автоматический"
-                if event.decision is DecisionStatus.ALLOWED
-                else "—"
-            )
-            self._prepend_history_row(event_id, event, outcome, mode)
-            return
         plate = event.normalized_plate or event.raw_text
         self._displayed_plate = plate
         self.plate_label.setText(plate)
@@ -544,8 +547,13 @@ class MainWindow(QMainWindow):
         )
         row = self._find_history_row(self._pending_event_id)
         if row is not None:
-            self.history.setItem(row, 4, QTableWidgetItem(outcome))
-            self.history.setItem(row, 5, QTableWidgetItem("Ручной"))
+            outcome_item = QTableWidgetItem(outcome)
+            outcome_item.setToolTip(outcome)
+            mode_item = QTableWidgetItem("Ручной")
+            mode_item.setToolTip("Ручной")
+            self.history.setItem(row, 4, outcome_item)
+            self.history.setItem(row, 5, mode_item)
+            self._set_history_row_pending(row, False)
         self._pending_event_id = None
         self._set_approval_enabled(False)
         self._restart_display_timer()
@@ -596,6 +604,7 @@ class MainWindow(QMainWindow):
             item.setToolTip(value)
             item.setData(Qt.ItemDataRole.UserRole, event_id)
             self.history.setItem(0, column, item)
+        self._set_history_row_pending(0, outcome == "Ожидает решения")
         return 0
 
     def _load_history(self) -> None:
@@ -622,6 +631,27 @@ class MainWindow(QMainWindow):
                 item.setToolTip(value)
                 item.setData(Qt.ItemDataRole.UserRole, row["id"])
                 self.history.setItem(0, column, item)
+            self._set_history_row_pending(0, outcome == "Ожидает решения")
+
+    def _set_history_row_pending(self, row: int, pending: bool) -> None:
+        background = QColor("#7a2632" if pending else "#172231")
+        foreground = QColor("#ffffff" if pending else "#e8edf5")
+        for column in range(self.history.columnCount()):
+            item = self.history.item(row, column)
+            if item is not None:
+                item.setBackground(background)
+                item.setForeground(foreground)
+                font = item.font()
+                font.setBold(pending)
+                item.setFont(font)
+
+    def _apply_history_column_visibility(self) -> None:
+        try:
+            visible = set(self._service.history_visible_columns)
+        except StorageError:
+            visible = set(HISTORY_COLUMNS)
+        for index, column in enumerate(HISTORY_COLUMNS):
+            self.history.setColumnHidden(index, column not in visible)
 
     def _restore_latest_pending(self) -> None:
         try:
@@ -659,6 +689,7 @@ class MainWindow(QMainWindow):
         self._display_timer.stop()
         plate_item = self.history.item(row, 2)
         if plate_item is not None:
+            self._displayed_plate = plate_item.text()
             self.plate_label.setText(plate_item.text())
         self.status_label.setText("ОЖИДАЕТ РЕШЕНИЯ")
         self.status_label.setStyleSheet(
@@ -694,6 +725,7 @@ class MainWindow(QMainWindow):
             admin_service=self._admin_service,
             plate_service=self._service,
             history_cleared=self._reset_after_history_clear,
+            columns_changed=self._apply_history_column_visibility,
             parent=self,
         )
         dialog.exec()
@@ -954,12 +986,14 @@ class AdminPanelDialog(QDialog):
         admin_service: AdminService,
         plate_service: PlateGuardService,
         history_cleared: Any,
+        columns_changed: Any,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._admin_service = admin_service
         self._plate_service = plate_service
         self._history_cleared = history_cleared
+        self._columns_changed = columns_changed
         self.setWindowTitle("Администрирование")
         self.setModal(True)
         self.setMinimumWidth(560)
@@ -983,11 +1017,33 @@ class AdminPanelDialog(QDialog):
             self.timeout_spin.setValue(self._plate_service.display_timeout_seconds)
         except StorageError:
             self.timeout_spin.setValue(10)
-        timeout_form.addRow("Показывать последний номер:", self.timeout_spin)
+        timeout_form.addRow("Очищать текущий номер через:", self.timeout_spin)
         layout.addLayout(timeout_form)
         self.save_timeout_button = QPushButton("Сохранить время отображения")
         self.save_timeout_button.clicked.connect(self._save_display_timeout)
         layout.addWidget(self.save_timeout_button)
+
+        columns_title = QLabel("Колонки таблицы «Последние события»")
+        columns_title.setObjectName("section")
+        layout.addWidget(columns_title)
+        try:
+            visible_columns = set(self._plate_service.history_visible_columns)
+        except StorageError:
+            visible_columns = set(HISTORY_COLUMNS)
+        columns_grid = QGridLayout()
+        self.column_checkboxes: dict[str, QCheckBox] = {}
+        for index, column in enumerate(HISTORY_COLUMNS):
+            checkbox = QCheckBox(_HISTORY_COLUMN_LABELS[column])
+            checkbox.setChecked(column in visible_columns)
+            if column in MANDATORY_HISTORY_COLUMNS:
+                checkbox.setEnabled(False)
+                checkbox.setToolTip("Обязательная колонка")
+            self.column_checkboxes[column] = checkbox
+            columns_grid.addWidget(checkbox, index // 3, index % 3)
+        layout.addLayout(columns_grid)
+        self.save_columns_button = QPushButton("Сохранить видимые колонки")
+        self.save_columns_button.clicked.connect(self._save_visible_columns)
+        layout.addWidget(self.save_columns_button)
 
         self.summary_label = QLabel()
         self.summary_label.setWordWrap(True)
@@ -1014,6 +1070,24 @@ class AdminPanelDialog(QDialog):
             self,
             "Настройка сохранена",
             f"Последний номер будет отображаться {self.timeout_spin.value()} секунд.",
+        )
+
+    def _save_visible_columns(self) -> None:
+        selected = [
+            column
+            for column, checkbox in self.column_checkboxes.items()
+            if checkbox.isChecked()
+        ]
+        try:
+            self._plate_service.set_history_visible_columns(selected)
+        except (StorageError, ValueError) as exc:
+            QMessageBox.critical(self, "Настройка не сохранена", str(exc))
+            return
+        self._columns_changed()
+        QMessageBox.information(
+            self,
+            "Настройка сохранена",
+            "Набор колонок таблицы обновлён.",
         )
 
     def _refresh_summary(self) -> None:

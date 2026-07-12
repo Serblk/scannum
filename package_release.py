@@ -7,7 +7,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 DIST = ROOT / "dist"
 APP_DIRECTORY = DIST / "ScanNum"
-ARCHIVE = DIST / "ScanNum-0.5.0-win64.zip"
+ARCHIVE = DIST / "ScanNum-0.6.1-win64.zip"
 
 
 def main() -> None:

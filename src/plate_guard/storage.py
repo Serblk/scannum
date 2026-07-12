@@ -10,6 +10,10 @@ from .config import CameraConfig
 from .models import DecisionMode, FuelingOutcome, RecognitionEvent
 
 
+HISTORY_COLUMNS = ("time", "camera", "plate", "decision", "fueling", "mode")
+MANDATORY_HISTORY_COLUMNS = frozenset({"time", "plate"})
+
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS cameras (
     id TEXT PRIMARY KEY,
@@ -354,6 +358,28 @@ class SQLiteRepository:
         except ValueError:
             return default
         return seconds if 3 <= seconds <= 120 else default
+
+    def set_history_visible_columns(self, columns: Sequence[str]) -> None:
+        selected = tuple(dict.fromkeys(columns))
+        unknown = set(selected) - set(HISTORY_COLUMNS)
+        if unknown:
+            raise ValueError(f"Неизвестные колонки: {', '.join(sorted(unknown))}")
+        if not MANDATORY_HISTORY_COLUMNS.issubset(selected):
+            raise ValueError("Колонки «Время» и «Номер» обязательны")
+        ordered = [column for column in HISTORY_COLUMNS if column in selected]
+        self._set_setting("history_visible_columns", ",".join(ordered))
+
+    def history_visible_columns(self) -> tuple[str, ...]:
+        value = self._get_setting("history_visible_columns")
+        if value is None:
+            return HISTORY_COLUMNS
+        selected = tuple(column for column in value.split(",") if column)
+        if (
+            set(selected) - set(HISTORY_COLUMNS)
+            or not MANDATORY_HISTORY_COLUMNS.issubset(selected)
+        ):
+            return HISTORY_COLUMNS
+        return tuple(column for column in HISTORY_COLUMNS if column in selected)
 
     def _set_setting(self, key: str, value: str) -> None:
         try:

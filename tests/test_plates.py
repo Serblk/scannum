@@ -12,6 +12,13 @@ class PlateNormalizationTests(unittest.TestCase):
     def test_preserves_leading_zero(self) -> None:
         self.assertEqual(normalize_plate("А030ВС777"), "А030ВС777")
 
+    def test_corrects_zero_to_letter_o_in_letter_positions(self) -> None:
+        self.assertEqual(normalize_plate("0533CM46"), "О533СМ46")
+        self.assertEqual(normalize_plate("A533C046"), "А533СО46")
+
+    def test_corrects_letter_o_to_zero_in_digit_positions(self) -> None:
+        self.assertEqual(normalize_plate("AО33BC77"), "А033ВС77")
+
     def test_rejects_non_plate_letters(self) -> None:
         with self.assertRaises(PlateValidationError):
             normalize_plate("Д123АА77")

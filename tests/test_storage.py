@@ -119,6 +119,23 @@ class SQLiteRepositoryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.repository.set_display_timeout_seconds(121)
 
+    def test_history_columns_keep_time_and_plate_mandatory(self) -> None:
+        self.assertEqual(
+            self.repository.history_visible_columns(),
+            ("time", "camera", "plate", "decision", "fueling", "mode"),
+        )
+        self.repository.set_history_visible_columns(
+            ("time", "plate", "decision", "fueling")
+        )
+        self.assertEqual(
+            self.repository.history_visible_columns(),
+            ("time", "plate", "decision", "fueling"),
+        )
+        with self.assertRaises(ValueError):
+            self.repository.set_history_visible_columns(("plate",))
+        with self.assertRaises(ValueError):
+            self.repository.set_history_visible_columns(("time", "plate", "unknown"))
+
     def _event(self, status: DecisionStatus) -> RecognitionEvent:
         return RecognitionEvent(
             camera_id="camera-1",

@@ -54,13 +54,26 @@ def canonicalize_ocr_text(value: str) -> str:
 
 
 def parse_plate(value: str) -> PlateParts:
-    canonical = canonicalize_ocr_text(value)
+    canonical = _correct_o_zero_by_position(canonicalize_ocr_text(value))
     match = _PLATE_PATTERN.fullmatch(canonical)
     if match is None:
         raise PlateValidationError(
             "Ожидается стандартный номер вида А123ВС77 или А123ВС777"
         )
     return PlateParts(**match.groupdict())
+
+
+def _correct_o_zero_by_position(value: str) -> str:
+    if len(value) not in {8, 9}:
+        return value
+    characters = list(value)
+    letter_positions = {0, 4, 5}
+    for index, character in enumerate(characters):
+        if index in letter_positions and character == "0":
+            characters[index] = "О"
+        elif index not in letter_positions and character == "О":
+            characters[index] = "0"
+    return "".join(characters)
 
 
 def normalize_plate(value: str) -> str:
